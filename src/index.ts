@@ -8,17 +8,18 @@ import {
   Result,
   nat64,
   ic,
-  Opt,
-  Principal
+  Opt
 } from 'azle';
 import { v4 as uuidv4 } from 'uuid';
+
+
 
 type Message = Record<{
   id: string;
   title: string;
   body: string;
-  senderId: Principal; // Use Principal for senderId
-  recipientId: Principal; // Use Principal for recipientId
+  senderId: string; 
+  recipientId: string; 
   read: boolean;
   createdAt: nat64;
   updatedAt: Opt<nat64>;
@@ -27,7 +28,7 @@ type Message = Record<{
 type MessagePayload = Record<{
   title: string;
   body: string;
-  recipientId: Principal; // Use Principal for recipientId
+  recipientId: string; 
 }>;
 
 type Participant = Record<{
@@ -50,18 +51,18 @@ let currentUser: Participant | null = null;
 
 $update;
 export function login(username: string, password: string): Result<string, string> {
-  const users = participantStorage.values().filter(user => user.username === username);
-  if (users.length === 0) {
+  const user = participantStorage.values().find(user => user.username === username);
+  if (!user) {
     return Result.Err('Invalid username');
   }
 
-  if (!verifyPassword(password, users[0].passwordHash)) {
+  if (!(user.passwordHash === hashPassword(password))) {
     return Result.Err('Invalid password');
   }
 
-  currentUser = users[0];
-  users[0].lastLogin = Opt.Some(ic.now()); // Use ic.now() for current time
-  participantStorage.insert(users[0].id, users[0]);
+  currentUser = user;
+  user.lastLogin = Opt.Some(ic.time());
+  participantStorage.insert(user.id, user);
 
   const newMessages = messageStorage.values().filter(msg => !msg.read && msg.recipientId == currentUser?.id);
   if (newMessages.length === 0) {
@@ -71,6 +72,7 @@ export function login(username: string, password: string): Result<string, string
   return Result.Ok(`You have ${newMessages.length} new messages`);
 }
 
+$update
 export function logout(): Result<string, string> {
   if (currentUser === null) {
     return Result.Err('No logged-in user to logout');
@@ -91,7 +93,7 @@ export function getMyMessages(): Result<Vec<Message>, string> {
     return Result.Err('No logged-in user');
   }
 
-  const newMessages = messageStorage.values().filter(msg => !msg.read && msg.recipientId == currentUser?.id);
+  const newMessages = messageStorage.values().filter(msg => msg.recipientId == currentUser?.id);
   if (newMessages.length === 0) {
     return Result.Err('You have no new messages.');
   }
@@ -129,7 +131,7 @@ export function addMessage(payload: MessagePayload): Result<Message, string> {
   }
 
   const recipient = participantStorage.get(payload.recipientId);
-  if (!recipient) {
+  if (!recipient.Some) {
     return Result.Err(`No participant exists with ID ${payload.recipientId}`);
   }
 
@@ -137,7 +139,7 @@ export function addMessage(payload: MessagePayload): Result<Message, string> {
     id: uuidv4(),
     read: false,
     senderId: currentUser.id,
-    createdAt: ic.now(),
+    createdAt: ic.time(),
     updatedAt: Opt.None,
     ...payload
   };
@@ -148,18 +150,22 @@ export function addMessage(payload: MessagePayload): Result<Message, string> {
 $update;
 export function updateMessage(id: string, payload: MessagePayload): Result<Message, string> {
   const existingMessage = messageStorage.get(id);
-  if (!existingMessage) {
+  if (!existingMessage.Some) {
     return Result.Err<Message, string>(`Couldn't update a message with id=${id}. Message not found`);
   }
+  const recipient = participantStorage.get(payload.recipientId);
+  if (!recipient.Some) {
+    return Result.Err(`No participant exists with ID ${payload.recipientId}`);
+  }
 
-  if (existingMessage.senderId != currentUser?.id) {
+  if (existingMessage.Some?.senderId !== currentUser?.id) {
     return Result.Err<Message, string>(`You don't have permission to update this message`);
   }
 
   const updatedMessage: Message = {
-    ...existingMessage,
+    ...existingMessage.Some,
     ...payload,
-    updatedAt: Opt.Some(ic.now())
+    updatedAt: Opt.Some(ic.time())
   };
   messageStorage.insert(id, updatedMessage);
   return Result.Ok<Message, string>(updatedMessage);
@@ -168,16 +174,16 @@ export function updateMessage(id: string, payload: MessagePayload): Result<Messa
 $update;
 export function deleteMessage(id: string): Result<Message, string> {
   const existingMessage = messageStorage.get(id);
-  if (!existingMessage) {
+  if (!existingMessage.Some) {
     return Result.Err<Message, string>(`Couldn't delete a message with id=${id}. Message not found.`);
   }
 
-  if (existingMessage.senderId != currentUser?.id) {
+  if (existingMessage.Some?.senderId !== currentUser?.id) {
     return Result.Err<Message, string>(`You don't have permission to delete this message`);
   }
 
   messageStorage.remove(id);
-  return Result.Ok<Message, string>(existingMessage);
+  return Result.Ok<Message, string>(existingMessage.Some);
 }
 
 $query;
@@ -195,19 +201,16 @@ export function addParticipant(payload: ParticipantPayload): Result<Participant,
 
   const participant: Participant = {
     id: uuidv4(),
+    username: payload.username,
     lastLogin: Opt.None,
-    createdAt: ic.now(),
+    createdAt: ic.time(),
     updatedAt: Opt.None,
-    ...createParticipant(payload)
+    passwordHash: hashPassword(payload.password)
   };
   participantStorage.insert(participant.id, participant);
   return Result.Ok(participant);
 }
 
-function verifyPassword(password: string, hash: string): boolean {
-  // Use a secure password hashing library to compare the password and hash
-  return hash === hashPassword(password);
-}
 
 function hashPassword(password: string): string {
   // Use a secure password hashing library to hash the password
@@ -224,12 +227,6 @@ function markMessagesAsRead(messages: Message[]): void {
   });
 }
 
-function createParticipant(payload: ParticipantPayload): Participant {
-  return {
-    ...payload,
-    passwordHash: hashPassword(payload.password)
-  };
-}
 
 globalThis.crypto = {
   getRandomValues: () => {
