@@ -12,9 +12,9 @@ type MessagePayload = record { title : text; body : text; recipientId : text };
 type Participant = record {
   id : text;
   username : text;
-  password : text;
   createdAt : nat64;
   updatedAt : opt nat64;
+  passwordHash : text;
   lastLogin : opt nat64;
 };
 type ParticipantPayload = record { username : text; password : text };
@@ -33,5 +33,6 @@ service : () -> {
   getMyMessages : () -> (_AzleResult_2);
   getParticipants : () -> (_AzleResult_3) query;
   login : (text, text) -> (_AzleResult_4);
+  logout : () -> (_AzleResult_4);
   updateMessage : (text, MessagePayload) -> (_AzleResult);
 }
